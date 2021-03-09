@@ -2,6 +2,7 @@ use anyhow::Context;
 use serde::Deserialize;
 use std::fs::File;
 use std::io::BufReader;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,6 +11,8 @@ pub type AppConfig = Arc<Config>;
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub chrome: Chrome,
+    pub http: Http,
+    pub data_base_folder: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -17,6 +20,11 @@ pub struct Chrome {
     pub binary_path: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Http {
+    pub listen_ip: IpAddr,
 }
 
 pub fn load_config() -> anyhow::Result<AppConfig> {

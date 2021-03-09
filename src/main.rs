@@ -1,10 +1,12 @@
 mod chrome_controller;
 mod chrome_supervisor;
 mod config;
+mod web;
 
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
+use crate::web::start_web_server;
 use anyhow::Context;
 use chrome_controller::chrome_controller;
 use chrome_supervisor::chrome_supervisor;
@@ -19,6 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::load_config().with_context(|| "Failed to load config".to_string())?;
 
+    let (webserver_port, webserver_fut) = start_web_server(Arc::clone(&config))?;
+
     let (chrome_debugging_port_tx, chrome_debugging_port_rx) = watch::channel(None);
     let (chrome_kill_tx, chrome_kill_rx) = mpsc::channel(1);
     let chrome_supervisor_handle = tokio::spawn(chrome_supervisor(
@@ -30,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chrome_controller_handle =
         tokio::spawn(chrome_controller(chrome_debugging_port_rx.clone()));
 
-    tokio::join!(chrome_supervisor_handle);
+    tokio::join!(chrome_supervisor_handle, webserver_fut);
 
     Ok(())
 }
