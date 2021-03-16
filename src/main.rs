@@ -3,7 +3,8 @@ mod chrome_supervisor;
 mod config;
 mod web;
 
-use tokio::sync::mpsc;
+use std::sync::mpsc as StdMpsc;
+use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
 
 use crate::web::start_web_server;
@@ -21,18 +22,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::load_config().with_context(|| "Failed to load config".to_string())?;
 
-    let (webserver_port, webserver_fut) = start_web_server(Arc::clone(&config))?;
+    let (webserver_socket_addr, webserver_fut) = start_web_server(Arc::clone(&config))?;
 
-    let (chrome_debugging_port_tx, chrome_debugging_port_rx) = watch::channel(None);
-    let (chrome_kill_tx, chrome_kill_rx) = mpsc::channel(1);
+    let (chrome_info_tx, chrome_info_rx) = watch::channel(None);
+    let (chrome_kill_tx, chrome_kill_rx) = TokioMpsc::unbounded_channel();
+
     let chrome_supervisor_handle = tokio::spawn(chrome_supervisor(
         Arc::clone(&config),
-        chrome_debugging_port_tx,
+        chrome_info_tx,
         chrome_kill_rx,
     ));
 
-    let chrome_controller_handle =
-        tokio::spawn(chrome_controller(chrome_debugging_port_rx.clone()));
+    let chrome_controller_handle = tokio::spawn(chrome_controller(
+        Arc::clone(&config),
+        chrome_info_rx.clone(),
+        chrome_kill_tx.clone(),
+        webserver_socket_addr,
+    ));
 
     tokio::join!(chrome_supervisor_handle, webserver_fut);
 

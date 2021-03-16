@@ -4,18 +4,18 @@ use anyhow::Context;
 use std::net::SocketAddr;
 use tracing::info;
 
-pub fn start_web_server(config: AppConfig) -> anyhow::Result<(u16, impl warp::Future)> {
+pub fn start_web_server(config: AppConfig) -> anyhow::Result<(SocketAddr, impl warp::Future)> {
     let port = portpicker::pick_unused_port()
         .with_context(|| "Failed to allocate unused port to use as webserver port")?;
 
     let handlebars = templates::load_handlebars()?;
     let routes = filters::create_routes(&config, handlebars);
-    let socket = SocketAddr::new(config.http.listen_ip, port);
-    let fut = warp::serve(routes).run(socket);
+    let socket_addr = SocketAddr::new(config.http.listen_ip, port);
+    let fut = warp::serve(routes).run(socket_addr);
 
-    info!("Started web server on {}", socket);
+    info!("Started web server on {}", socket_addr);
 
-    Ok((port, fut))
+    Ok((socket_addr, fut))
 }
 
 mod templates {
