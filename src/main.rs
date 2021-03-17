@@ -2,8 +2,8 @@ mod chrome_controller;
 mod chrome_supervisor;
 mod config;
 mod web;
+mod file_change_watcher;
 
-use std::sync::mpsc as StdMpsc;
 use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
 
@@ -12,7 +12,7 @@ use anyhow::Context;
 use chrome_controller::chrome_controller;
 use chrome_supervisor::chrome_supervisor;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 

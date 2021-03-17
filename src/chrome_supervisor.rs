@@ -5,7 +5,6 @@ use tracing::{error, info};
 
 use crate::config::AppConfig;
 use anyhow::Context;
-use warp::addr::remote;
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub struct ChromeInfo {
