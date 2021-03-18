@@ -54,6 +54,7 @@ mod notify {
     use async_trait::async_trait;
     use notify::Watcher as _;
     use tokio::sync::mpsc::UnboundedSender;
+    use tracing::debug;
 
     use std::collections::hash_map::Entry;
     use std::path::{Path, PathBuf};
@@ -170,10 +171,20 @@ mod notify {
         fn handle_event_loop_message(&mut self, msg: EventLoopMsg) {
             match msg {
                 EventLoopMsg::AddWatch(path, tx) => {
-                    tx.send(self.add_watch(path));
+                    if let Err(e) = tx.send(self.add_watch(path)) {
+                        debug!(
+                            msg = "AddWatch",
+                            "Failed to send event loop response; {:?}", e
+                        );
+                    }
                 }
                 EventLoopMsg::RemoveWatch(cookie, tx) => {
-                    tx.send(self.remove_watch(cookie));
+                    if let Err(e) = tx.send(self.remove_watch(cookie)) {
+                        debug!(
+                            msg = "RemoveWatch",
+                            "Failed to send event loop response; {:?}", e
+                        );
+                    }
                 }
                 EventLoopMsg::Shutdown => {
                     self.running = false;
@@ -203,7 +214,9 @@ mod notify {
                     .collect::<Vec<_>>();
 
                 for cookie in failed_watches {
-                    self.remove_watch(cookie);
+                    if let Err(e) = self.remove_watch(cookie) {
+                        debug!("Failed to remove watch from watch list, that could not be notified about a change; cookie {:?} {:?}", cookie, e);
+                    }
                 }
             }
         }
