@@ -286,7 +286,7 @@ mod notify {
                 notify::Error::Generic(s) => Self::Generic(s),
                 notify::Error::Io(e) => Self::Io(e),
                 notify::Error::PathNotFound => Self::Generic(String::from("Path not found")),
-                notify::Error::WatchNotFound => Self::Generic(String::from("Watch not found")),
+                notify::Error::WatchNotFound => Self::WatchNotFound,
             }
         }
     }
