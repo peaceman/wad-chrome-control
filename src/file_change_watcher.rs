@@ -3,6 +3,7 @@ use std::result::Result as StdResult;
 use std::time::Duration;
 use std::{env, error::Error as StdError};
 
+use async_trait::async_trait;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 type Result<T> = StdResult<T, Error>;
@@ -30,15 +31,13 @@ impl Watch {
     }
 }
 
+#[async_trait]
 pub trait Watcher: Sized {
     fn new(delay: Duration) -> Result<Self>;
 
-    fn watch(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<Watch>;
+    async fn watch(&self, path: impl AsRef<Path> + Send + 'async_trait) -> Result<Watch>;
 
-    fn unwatch(&self, watch: Watch) -> Result<()>;
+    async fn unwatch(&self, watch: Watch) -> Result<()>;
 }
 
 pub fn watcher(delay: Duration) -> Result<impl Watcher> {
@@ -49,10 +48,11 @@ pub fn watcher(delay: Duration) -> Result<impl Watcher> {
 pub struct Cookie(usize);
 
 mod notify {
+    use async_trait::async_trait;
     use notify::Watcher as _;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-    use super::{ChangeEvent, Cookie, Result, Watch, Watcher, absolute_path_buf, parent_path};
+    use super::{absolute_path_buf, parent_path, ChangeEvent, Cookie, Result, Watch, Watcher};
 
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
@@ -65,16 +65,14 @@ mod notify {
     };
 
     enum EventLoopMsg {
-        AddWatch(
-            PathBuf,
-            Sender<Result<Watch>>,
-        ),
+        AddWatch(PathBuf, Sender<Result<Watch>>),
         RemoveWatch(Cookie, Sender<Result<()>>),
         Shutdown,
     }
 
     pub struct NotifyWatcher(Mutex<Sender<EventLoopMsg>>);
 
+    #[async_trait]
     impl Watcher for NotifyWatcher {
         fn new(delay: Duration) -> Result<Self> {
             let (event_loop_tx, event_loop_rx) = channel();
@@ -85,26 +83,27 @@ mod notify {
             Ok(Self(Mutex::new(event_loop_tx)))
         }
 
-        fn watch(
-            &self,
-            path: impl AsRef<Path>,
-        ) -> Result<Watch> {
-            let pb = absolute_path_buf(path)?;
+        async fn watch(&self, path: impl AsRef<Path> + Send + 'async_trait) -> Result<Watch> {
+            let pb = { absolute_path_buf(path)? };
             let (r_tx, r_rx) = channel();
 
             let msg = EventLoopMsg::AddWatch(pb, r_tx);
-
             self.0.lock().unwrap().send(msg).unwrap();
-            r_rx.recv().unwrap()
+
+            tokio::task::spawn_blocking(move || r_rx.recv().unwrap())
+                .await
+                .unwrap()
         }
 
-        fn unwatch(&self, watch: Watch) -> Result<()> {
+        async fn unwatch(&self, watch: Watch) -> Result<()> {
             let (r_tx, r_rx) = channel();
 
             let msg = EventLoopMsg::RemoveWatch(watch.cookie, r_tx);
 
             self.0.lock().unwrap().send(msg).unwrap();
-            r_rx.recv().unwrap()
+            tokio::task::spawn_blocking(move || r_rx.recv().unwrap())
+                .await
+                .unwrap()
         }
     }
 
@@ -208,10 +207,7 @@ mod notify {
             }
         }
 
-        fn add_watch(
-            &mut self,
-            path: PathBuf,
-        ) -> Result<Watch> {
+        fn add_watch(&mut self, path: PathBuf) -> Result<Watch> {
             let parent_path = parent_path(&path)?;
 
             match self.parent_folders.entry(parent_path.to_owned()) {
@@ -243,10 +239,7 @@ mod notify {
         }
 
         fn remove_watch(&mut self, cookie: Cookie) -> Result<()> {
-            let path = self
-                .paths
-                .get(&cookie)
-                .ok_or(super::Error::WatchNotFound)?;
+            let path = self.paths.get(&cookie).ok_or(super::Error::WatchNotFound)?;
 
             // if the path was added, this can't fail
             let parent_path = parent_path(&path).unwrap();
@@ -304,4 +297,18 @@ fn absolute_path_buf(path: impl AsRef<Path>) -> Result<PathBuf> {
     };
 
     Ok(pb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Watch;
+
+    fn is_sync<T: Sync>() {}
+    fn is_send<T: Send>() {}
+
+    #[test]
+    fn check_sync_and_send() {
+        is_sync::<Watch>();
+        is_send::<Watch>();
+    }
 }
