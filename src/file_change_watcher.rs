@@ -164,7 +164,8 @@ mod notify {
                     break;
                 }
 
-                thread::sleep(Duration::from_millis(100));
+                // this can't be it
+                thread::sleep(Duration::from_millis(10));
             }
         }
 
