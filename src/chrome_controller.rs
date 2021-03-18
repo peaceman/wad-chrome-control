@@ -1,25 +1,62 @@
-use crate::chrome_supervisor::ChromeInfo;
 use crate::config::AppConfig;
+use crate::{
+    chrome_supervisor::ChromeInfo,
+    file_change_watcher::{ChangeEvent, Watcher},
+};
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::mpsc as StdMpsc;
 use std::time::{Duration, Instant};
+use std::{collections::HashMap, fs::File, io::BufReader, path::Path, sync::Arc};
 
 use anyhow::Context;
 use headless_chrome::Browser;
+use serde::Deserialize;
 use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
 use tracing::{error, info, trace, warn};
 use url::Url;
 
+async fn read_chrome_config(path: impl AsRef<Path>) -> anyhow::Result<ChromeConfig> {
+    let file = File::open(path)?;
+
+    tokio::task::spawn_blocking(move || {
+        let reader = BufReader::new(file);
+        let chrome_config: ChromeConfig = serde_yaml::from_reader(reader)?;
+
+        Ok(chrome_config)
+    })
+    .await?
+}
+
 pub async fn chrome_controller(
-    _config: AppConfig,
+    config: AppConfig,
     mut chrome_info_rx: watch::Receiver<Option<ChromeInfo>>,
     chrome_kill_tx: TokioMpsc::UnboundedSender<ChromeInfo>,
     webserver_socket_addr: SocketAddr,
+    watcher: Arc<impl Watcher>,
 ) -> anyhow::Result<()> {
     let webserver_url = Url::parse(format!("http://{}", webserver_socket_addr).as_ref())?;
+
+    let (chrome_config_tx, mut chrome_config_rx) = watch::channel(None);
+    tokio::spawn({
+        let mut watch = watcher
+            .watch(config.data_base_folder.join("chrome-config"))
+            .await?;
+
+        async move {
+            while let Some(ChangeEvent(path)) = watch.channel().recv().await {
+                if let Ok(config) = read_chrome_config(path).await {
+                    if let Err(e) = chrome_config_tx.send(Some(config)) {
+                        error!(
+                            "Failed to publish chrome config update; aborting task; {:?}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    });
 
     loop {
         // loop until we receive a chrome info
@@ -62,17 +99,20 @@ pub async fn chrome_controller(
             (Instant::now() + Duration::from_secs(2)).into(),
             Duration::from_secs(2),
         );
-        let mut config_update_interval = tokio::time::interval(Duration::from_secs(5));
+
+        if send_chrome_config_update(&chrome_config_rx, &chrome_driver_control_tx, &webserver_url)
+            .is_err()
+        {
+            chrome_kill_tx.send(chrome_info)?;
+            continue;
+        }
 
         loop {
             tokio::select! {
-                _ = config_update_interval.tick() => {
-                    info!("Send update chrome config control message");
-                    if chrome_driver_control_tx.send(ChromeControlMessage::ConfigUpdate {
-                        config: ChromeConfig {
-                            url: webserver_url.clone(),
-                        },
-                    }).is_err() {
+                chrome_config = chrome_config_rx.changed() => {
+                    info!("Chrome config changed: {:?}", chrome_config);
+
+                    if send_chrome_config_update(&chrome_config_rx, &chrome_driver_control_tx, &webserver_url).is_err() {
                         chrome_kill_tx.send(chrome_info)?;
                         break;
                     }
@@ -94,6 +134,27 @@ pub async fn chrome_controller(
 
         info!("Finished inner chrome controller loop");
     }
+}
+
+fn send_chrome_config_update(
+    chrome_config_rx: &watch::Receiver<Option<ChromeConfig>>,
+    chrome_driver_control_tx: &StdMpsc::Sender<ChromeControlMessage>,
+    webserver_url: &Url,
+) -> anyhow::Result<()> {
+    match *chrome_config_rx.borrow() {
+        Some(ref chrome_config) => {
+            chrome_driver_control_tx.send(ChromeControlMessage::ConfigUpdate {
+                config: chrome_config.clone(),
+            })?
+        }
+        None => chrome_driver_control_tx.send(ChromeControlMessage::ConfigUpdate {
+            config: ChromeConfig {
+                url: webserver_url.clone(),
+            },
+        })?,
+    }
+
+    Ok(())
 }
 
 async fn send_chrome_driver_heartbeat(
@@ -138,7 +199,7 @@ impl From<failure::Error> for DriveChromeError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Clone)]
 struct ChromeConfig {
     url: Url,
 }

@@ -19,7 +19,7 @@ pub enum Error {
 }
 
 #[derive(Debug)]
-pub struct ChangeEvent(PathBuf);
+pub struct ChangeEvent(pub PathBuf);
 
 pub struct Watch {
     cookie: Cookie,
