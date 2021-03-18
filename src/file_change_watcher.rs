@@ -1,12 +1,13 @@
+use async_trait::async_trait;
+use tokio::sync::mpsc::UnboundedReceiver;
+
+use std::env;
 use std::path::{Path, PathBuf};
 use std::result::Result as StdResult;
 use std::time::Duration;
-use std::{env, error::Error as StdError};
-
-use async_trait::async_trait;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 type Result<T> = StdResult<T, Error>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
@@ -48,17 +49,17 @@ pub fn watcher(delay: Duration) -> Result<impl Watcher> {
 pub struct Cookie(usize);
 
 mod notify {
-    use async_trait::async_trait;
-    use notify::Watcher as _;
-    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-
     use super::{absolute_path_buf, parent_path, ChangeEvent, Cookie, Result, Watch, Watcher};
 
+    use async_trait::async_trait;
+    use notify::Watcher as _;
+    use tokio::sync::mpsc::UnboundedSender;
+
+    use std::collections::hash_map::Entry;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
     use std::thread;
     use std::time::Duration;
-    use std::{collections::hash_map::Entry, env};
     use std::{
         collections::HashMap,
         sync::mpsc::{channel, Receiver, Sender},
