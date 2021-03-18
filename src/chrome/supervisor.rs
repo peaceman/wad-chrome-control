@@ -1,9 +1,9 @@
+use crate::config::AppConfig;
+
 use tokio::process;
 use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
 use tracing::{error, info};
-
-use crate::config::AppConfig;
 use anyhow::Context;
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]

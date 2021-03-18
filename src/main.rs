@@ -1,20 +1,17 @@
-mod chrome_config;
-mod chrome_controller;
-mod chrome_supervisor;
+mod chrome;
 mod config;
 mod file_change_watcher;
 mod web;
 
-use file_change_watcher::Watcher;
-use tokio::sync::mpsc as TokioMpsc;
-use tokio::sync::watch;
+use chrome::controller::chrome_controller;
+use chrome::supervisor::chrome_supervisor;
+use web::start_web_server;
 
-use crate::web::start_web_server;
-use anyhow::Context;
-use chrome_controller::chrome_controller;
-use chrome_supervisor::chrome_supervisor;
 use std::sync::Arc;
 
+use anyhow::Context;
+use tokio::sync::mpsc as TokioMpsc;
+use tokio::sync::watch;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
@@ -23,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging()?;
 
     let config = config::load_config().with_context(|| "Failed to load config".to_string())?;
-    let chrome_config_watcher = chrome_config::Watcher::new(
+    let chrome_config_watcher = chrome::config::Watcher::new(
         Arc::new(file_change_watcher::watcher(
             std::time::Duration::from_secs(2),
         )?),

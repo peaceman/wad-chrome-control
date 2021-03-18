@@ -1,13 +1,12 @@
-use crate::{chrome_config::ChromeConfig, config::AppConfig};
 use crate::{
-    chrome_supervisor::ChromeInfo,
-    file_change_watcher::{ChangeEvent, Watcher},
+    chrome::{config::ChromeConfig, supervisor::ChromeInfo},
+    config::AppConfig,
 };
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::mpsc as StdMpsc;
 use std::time::{Duration, Instant};
-use std::{collections::HashMap, fs::File, io::BufReader, path::Path, sync::Arc};
 
 use anyhow::Context;
 use headless_chrome::Browser;
