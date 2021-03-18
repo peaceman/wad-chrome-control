@@ -40,10 +40,23 @@ pub async fn chrome_controller(
 
     let (chrome_config_tx, mut chrome_config_rx) = watch::channel(None);
     tokio::spawn({
+        let chrome_config_path = config.data_base_folder.join("chrome-config");
+
+        // send the initial config state
+        if let Ok(config) = read_chrome_config(&chrome_config_path).await {
+            if let Err(e) = chrome_config_tx.send(Some(config)) {
+                error!(
+                    "Failed to publish chrome config update; aborting task; {:?}",
+                    e
+                );
+            }
+        }
+
         let mut watch = watcher
-            .watch(config.data_base_folder.join("chrome-config"))
+            .watch(&chrome_config_path)
             .await?;
 
+        // send config changes
         async move {
             while let Some(ChangeEvent(path)) = watch.channel().recv().await {
                 if let Ok(config) = read_chrome_config(path).await {
