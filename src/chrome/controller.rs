@@ -23,15 +23,24 @@ pub async fn chrome_controller(
     mut chrome_config_rx: watch::Receiver<Option<ChromeConfig>>,
 ) -> anyhow::Result<()> {
     let webserver_url = Url::parse(format!("http://{}", webserver_socket_addr).as_ref())?;
+    let mut got_new_chrome_info = true;
 
     loop {
         // loop until we receive a chrome info
         info!("Waiting for chrome info");
-        chrome_info_rx.changed().await?;
-        let chrome_info = match *chrome_info_rx.borrow() {
-            Some(v) => v,
-            None => continue,
+        let chrome_info = loop {
+            let chrome_info = *chrome_info_rx.borrow();
+            match (chrome_info, got_new_chrome_info) {
+                (Some(chrome_info), true) => break chrome_info,
+                _ => {
+                    chrome_info_rx.changed().await?;
+                    got_new_chrome_info = true;
+                    continue;
+                }
+            }
         };
+
+        got_new_chrome_info = false;
 
         info!("Received chrome info {:?}", chrome_info);
 
