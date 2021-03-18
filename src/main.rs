@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging()?;
 
     let config = config::load_config().with_context(|| "Failed to load config".to_string())?;
-    let watcher = Arc::new(file_change_watcher::watcher(std::time::Duration::from_secs(1))?);
+    let watcher = Arc::new(file_change_watcher::watcher(std::time::Duration::from_secs(2))?);
 
     let (webserver_socket_addr, webserver_fut) = start_web_server(Arc::clone(&config))?;
 

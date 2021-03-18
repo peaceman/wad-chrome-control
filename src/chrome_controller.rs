@@ -59,13 +59,16 @@ pub async fn chrome_controller(
         // send config changes
         async move {
             while let Some(ChangeEvent(path)) = watch.channel().recv().await {
-                if let Ok(config) = read_chrome_config(path).await {
-                    if let Err(e) = chrome_config_tx.send(Some(config)) {
-                        error!(
-                            "Failed to publish chrome config update; aborting task; {:?}",
-                            e
-                        );
-                    }
+                let pub_result = match read_chrome_config(path).await {
+                    Ok(config) => chrome_config_tx.send(Some(config)),
+                    Err(_) => chrome_config_tx.send(None),
+                };
+
+                if let Err(e) = pub_result {
+                    error!(
+                        "Failed to publish chrome config update; aborting task; {:?}",
+                        e
+                    );
                 }
             }
         }

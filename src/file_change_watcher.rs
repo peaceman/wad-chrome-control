@@ -197,9 +197,12 @@ mod notify {
             match event {
                 notify::DebouncedEvent::Create(path)
                 | notify::DebouncedEvent::Write(path)
-                | notify::DebouncedEvent::Remove(path)
-                | notify::DebouncedEvent::Rename(_, path) => {
+                | notify::DebouncedEvent::Remove(path) => {
                     self.emit_change_event(path);
+                }
+                notify::DebouncedEvent::Rename(source_path, target_path) => {
+                    self.emit_change_event(source_path);
+                    self.emit_change_event(target_path);
                 }
                 _ => {}
             }
