@@ -1,8 +1,9 @@
+mod chrome_config;
 mod chrome_controller;
 mod chrome_supervisor;
 mod config;
-mod web;
 mod file_change_watcher;
+mod web;
 
 use file_change_watcher::Watcher;
 use tokio::sync::mpsc as TokioMpsc;
@@ -22,7 +23,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging()?;
 
     let config = config::load_config().with_context(|| "Failed to load config".to_string())?;
-    let watcher = Arc::new(file_change_watcher::watcher(std::time::Duration::from_secs(2))?);
+    let chrome_config_watcher = chrome_config::Watcher::new(
+        Arc::new(file_change_watcher::watcher(
+            std::time::Duration::from_secs(2),
+        )?),
+        config.data_base_folder.join("chrome-config"),
+    );
+
+    let chrome_config_rx = chrome_config_watcher.channel();
 
     let (webserver_socket_addr, webserver_fut) = start_web_server(Arc::clone(&config))?;
 
@@ -40,10 +48,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chrome_info_rx.clone(),
         chrome_kill_tx.clone(),
         webserver_socket_addr,
-        Arc::clone(&watcher),
+        chrome_config_rx,
     ));
 
-    tokio::join!(chrome_supervisor_handle, webserver_fut);
+    tokio::join!(
+        chrome_supervisor_handle,
+        webserver_fut,
+        chrome_config_watcher.run(),
+        chrome_controller_handle
+    );
 
     Ok(())
 }

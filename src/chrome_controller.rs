@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::{chrome_config::ChromeConfig, config::AppConfig};
 use crate::{
     chrome_supervisor::ChromeInfo,
     file_change_watcher::{ChangeEvent, Watcher},
@@ -11,68 +11,19 @@ use std::{collections::HashMap, fs::File, io::BufReader, path::Path, sync::Arc};
 
 use anyhow::Context;
 use headless_chrome::Browser;
-use serde::Deserialize;
 use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
 use tracing::{error, info, trace, warn};
 use url::Url;
-
-async fn read_chrome_config(path: impl AsRef<Path>) -> anyhow::Result<ChromeConfig> {
-    let file = File::open(path)?;
-
-    tokio::task::spawn_blocking(move || {
-        let reader = BufReader::new(file);
-        let chrome_config: ChromeConfig = serde_yaml::from_reader(reader)?;
-
-        Ok(chrome_config)
-    })
-    .await?
-}
 
 pub async fn chrome_controller(
     config: AppConfig,
     mut chrome_info_rx: watch::Receiver<Option<ChromeInfo>>,
     chrome_kill_tx: TokioMpsc::UnboundedSender<ChromeInfo>,
     webserver_socket_addr: SocketAddr,
-    watcher: Arc<impl Watcher>,
+    mut chrome_config_rx: watch::Receiver<Option<ChromeConfig>>,
 ) -> anyhow::Result<()> {
     let webserver_url = Url::parse(format!("http://{}", webserver_socket_addr).as_ref())?;
-
-    let (chrome_config_tx, mut chrome_config_rx) = watch::channel(None);
-    tokio::spawn({
-        let chrome_config_path = config.data_base_folder.join("chrome-config");
-
-        // send the initial config state
-        if let Ok(config) = read_chrome_config(&chrome_config_path).await {
-            if let Err(e) = chrome_config_tx.send(Some(config)) {
-                error!(
-                    "Failed to publish chrome config update; aborting task; {:?}",
-                    e
-                );
-            }
-        }
-
-        let mut watch = watcher
-            .watch(&chrome_config_path)
-            .await?;
-
-        // send config changes
-        async move {
-            while let Some(ChangeEvent(path)) = watch.channel().recv().await {
-                let pub_result = match read_chrome_config(path).await {
-                    Ok(config) => chrome_config_tx.send(Some(config)),
-                    Err(_) => chrome_config_tx.send(None),
-                };
-
-                if let Err(e) = pub_result {
-                    error!(
-                        "Failed to publish chrome config update; aborting task; {:?}",
-                        e
-                    );
-                }
-            }
-        }
-    });
 
     loop {
         // loop until we receive a chrome info
@@ -213,11 +164,6 @@ impl From<failure::Error> for DriveChromeError {
     fn from(source: failure::Error) -> Self {
         anyhow::Error::new(source.compat()).into()
     }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct ChromeConfig {
-    url: Url,
 }
 
 #[derive(Debug)]
