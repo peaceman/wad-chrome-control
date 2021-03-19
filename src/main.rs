@@ -10,6 +10,7 @@ use web::start_web_server;
 use std::sync::Arc;
 
 use anyhow::Context;
+use anyhow::anyhow;
 use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
 use tracing_subscriber::layer::SubscriberExt;
@@ -29,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let chrome_config_rx = chrome_config_watcher.channel();
 
-    let (webserver_socket_addr, webserver_fut) = start_web_server(Arc::clone(&config))?;
+    let (webserver_socket_addr, webserver_handle) = start_web_server(Arc::clone(&config))?;
 
     let (chrome_info_tx, chrome_info_rx) = watch::channel(None);
     let (chrome_kill_tx, chrome_kill_rx) = TokioMpsc::unbounded_channel();
@@ -48,14 +49,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chrome_config_rx,
     ));
 
-    tokio::join!(
-        chrome_supervisor_handle,
-        webserver_fut,
-        chrome_config_watcher.run(),
-        chrome_controller_handle
-    );
+    let err = tokio::select! {
+        _ = chrome_supervisor_handle => anyhow!("chrome supervisor finished early"),
+        _ = webserver_handle => anyhow!("webserver finished early"),
+        _ = chrome_config_watcher.run() => anyhow!("chrome config watcher finished early"),
+        _ = chrome_controller_handle => anyhow!("chrome controller finished early"),
+    };
 
-    Ok(())
+    Err(err.into())
 }
 
 fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
