@@ -52,6 +52,7 @@ where
         self.config_rx.clone()
     }
 
+    #[tracing::instrument(name = "ChromeConfigWatcher::async_task_loop", skip(self))]
     async fn async_task_loop(self) -> anyhow::Result<()> {
         // try to read the chrome config initially before waiting for further file changes
         info!("Reading the initial chrome config");

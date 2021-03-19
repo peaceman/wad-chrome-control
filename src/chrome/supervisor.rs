@@ -18,6 +18,7 @@ impl ChromeInfo {
     }
 }
 
+#[tracing::instrument(skip(config, chrome_info_tx, chrome_kill_rx))]
 pub async fn chrome_supervisor(
     config: AppConfig,
     chrome_info_tx: watch::Sender<Option<ChromeInfo>>,
