@@ -1,10 +1,12 @@
-use anyhow::Context;
-use serde::Deserialize;
 use std::fs::File;
 use std::io::BufReader;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context;
+use serde::Deserialize;
 
 pub type AppConfig = Arc<Config>;
 
@@ -20,6 +22,8 @@ pub struct Chrome {
     pub binary_path: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(with = "humantime_serde")]
+    pub heartbeat_interval: Duration,
 }
 
 #[derive(Debug, Deserialize)]

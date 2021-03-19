@@ -13,9 +13,9 @@ use tokio::sync::watch;
 use tracing::{info, trace, warn};
 use url::Url;
 
-#[tracing::instrument(skip(_config, chrome_info_rx, chrome_kill_tx, chrome_config_rx, webserver_socket_addr))]
+#[tracing::instrument(skip(config, chrome_info_rx, chrome_kill_tx, chrome_config_rx, webserver_socket_addr))]
 pub async fn chrome_controller(
-    _config: AppConfig,
+    config: AppConfig,
     mut chrome_info_rx: watch::Receiver<Option<ChromeInfo>>,
     chrome_kill_tx: TokioMpsc::UnboundedSender<ChromeInfo>,
     webserver_socket_addr: SocketAddr,
@@ -65,6 +65,7 @@ pub async fn chrome_controller(
         let chrome_driver = chrome::driver::Driver::new(
             inner_chrome_kill_tx,
             chrome_websocket_url.clone(),
+            config.chrome.heartbeat_interval,
         )?;
 
         // publish the currently available chrome config before waiting for changes

@@ -16,8 +16,9 @@ impl Driver {
     pub fn new(
         chrome_kill_tx: tokio::sync::oneshot::Sender<()>,
         websocket_url: Url,
+        heartbeat_interval: Duration,
     ) -> anyhow::Result<Self> {
-        let event_loop = EventLoop::new(chrome_kill_tx, websocket_url);
+        let event_loop = EventLoop::new(chrome_kill_tx, websocket_url, heartbeat_interval);
         let driver = Self {
             event_loop_tx: event_loop.channel(),
         };
@@ -75,9 +76,10 @@ impl EventLoop {
     fn new(
         chrome_kill_tx: tokio::sync::oneshot::Sender<()>,
         websocket_url: Url,
+        heartbeat_interval: Duration,
     ) -> Self {
         let (event_loop_tx, event_loop_rx) = crossbeam::channel::unbounded();
-        let heartbeat_ticker_rx = crossbeam::channel::tick(Duration::from_secs(15));
+        let heartbeat_ticker_rx = crossbeam::channel::tick(heartbeat_interval);
 
         Self {
             event_loop_rx,
