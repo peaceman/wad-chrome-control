@@ -1,22 +1,21 @@
 use crate::{
-    chrome::{config::ChromeConfig, supervisor::ChromeInfo},
+    chrome::{self, config::ChromeConfig, supervisor::ChromeInfo},
     config::AppConfig,
 };
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::mpsc as StdMpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Context;
-use headless_chrome::Browser;
 use tokio::sync::mpsc as TokioMpsc;
 use tokio::sync::watch;
-use tracing::{error, info, trace, warn};
+use tracing::{info, trace, warn};
 use url::Url;
 
+#[tracing::instrument(skip(_config, chrome_info_rx, chrome_kill_tx, chrome_config_rx, webserver_socket_addr))]
 pub async fn chrome_controller(
-    config: AppConfig,
+    _config: AppConfig,
     mut chrome_info_rx: watch::Receiver<Option<ChromeInfo>>,
     chrome_kill_tx: TokioMpsc::UnboundedSender<ChromeInfo>,
     webserver_socket_addr: SocketAddr,
@@ -62,45 +61,30 @@ pub async fn chrome_controller(
         };
 
         info!("Spawning chrome driver thread");
-        let (inner_chrome_kill_tx, mut inner_chrome_kill_rx) = TokioMpsc::unbounded_channel();
-        let (chrome_driver_control_tx, chrome_driver_control_recv) = StdMpsc::channel();
-        let _chrome_driver_thread_handle = spawn_chrome_driver_thread(
+        let (inner_chrome_kill_tx, inner_chrome_kill_rx) = tokio::sync::oneshot::channel();
+        let chrome_driver = chrome::driver::Driver::new(
             inner_chrome_kill_tx,
-            chrome_driver_control_recv,
             chrome_websocket_url.clone(),
-        );
+        )?;
 
-        let mut heartbeat_interval = tokio::time::interval_at(
-            (Instant::now() + Duration::from_secs(2)).into(),
-            Duration::from_secs(2),
-        );
-
-        if send_chrome_config_update(&chrome_config_rx, &chrome_driver_control_tx, &webserver_url)
-            .is_err()
-        {
-            chrome_kill_tx.send(chrome_info)?;
+        // publish the currently available chrome config before waiting for changes
+        if send_chrome_config_update(&chrome_config_rx, &chrome_driver, &webserver_url).is_err() {
             continue;
         }
 
+        tokio::pin!(inner_chrome_kill_rx);
+
         loop {
             tokio::select! {
-                chrome_config = chrome_config_rx.changed() => {
-                    info!("Chrome config changed: {:?}", chrome_config);
+                Ok(_) = chrome_config_rx.changed() => {
+                    info!("Chrome config changed");
 
-                    if send_chrome_config_update(&chrome_config_rx, &chrome_driver_control_tx, &webserver_url).is_err() {
-                        chrome_kill_tx.send(chrome_info)?;
+                    if send_chrome_config_update(&chrome_config_rx, &chrome_driver, &webserver_url).is_err() {
                         break;
                     }
                 }
-                _ = heartbeat_interval.tick() => {
-                    let control_tx = chrome_driver_control_tx.clone();
-                    if send_chrome_driver_heartbeat(control_tx, Duration::from_secs(5)).await.is_err() {
-                        chrome_kill_tx.send(chrome_info)?;
-                        break;
-                    }
-                }
-                Some(_) = inner_chrome_kill_rx.recv() => {
-                    info!("Received chrome kill message, re-dispatching");
+                _ = &mut inner_chrome_kill_rx => {
+                    info!("Received chrome kill signal from chrome driver; re-dispatching");
                     chrome_kill_tx.send(chrome_info)?;
                     break;
                 }
@@ -113,157 +97,16 @@ pub async fn chrome_controller(
 
 fn send_chrome_config_update(
     chrome_config_rx: &watch::Receiver<Option<ChromeConfig>>,
-    chrome_driver_control_tx: &StdMpsc::Sender<ChromeControlMessage>,
+    chrome_driver: &chrome::driver::Driver,
     webserver_url: &Url,
 ) -> anyhow::Result<()> {
     match *chrome_config_rx.borrow() {
-        Some(ref chrome_config) => {
-            chrome_driver_control_tx.send(ChromeControlMessage::ConfigUpdate {
-                config: chrome_config.clone(),
-            })?
-        }
-        None => chrome_driver_control_tx.send(ChromeControlMessage::ConfigUpdate {
-            config: ChromeConfig {
-                url: webserver_url.clone(),
-            },
+        Some(ref chrome_config) => chrome_driver.update_chrome_config(chrome_config.clone())?,
+        None => chrome_driver.update_chrome_config(ChromeConfig {
+            url: webserver_url.clone(),
         })?,
     }
 
-    Ok(())
-}
-
-async fn send_chrome_driver_heartbeat(
-    chrome_driver_control_tx: StdMpsc::Sender<ChromeControlMessage>,
-    heartbeat_timeout: Duration,
-) -> anyhow::Result<()> {
-    trace!("Send heartbeat");
-    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-    chrome_driver_control_tx.send(ChromeControlMessage::Heartbeat { response_tx })?;
-
-    match tokio::time::timeout(heartbeat_timeout, response_rx).await {
-        Ok(result) => match result {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                warn!("Received heartbeat failure {:?}", e);
-                Err(e.into())
-            }
-        },
-        Err(e) => {
-            warn!(
-                "Did not receive heartbeat response within {:?}",
-                heartbeat_timeout
-            );
-            Err(e.into())
-        }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-enum DriveChromeError {
-    #[error("Failed to connect to chrome")]
-    ConnectionFailure(failure::Error),
-    #[error("Chrome was unresponsive")]
-    Unresponsive(failure::Error),
-    #[error(transparent)]
-    Unknown(#[from] anyhow::Error),
-}
-
-impl From<failure::Error> for DriveChromeError {
-    fn from(source: failure::Error) -> Self {
-        anyhow::Error::new(source.compat()).into()
-    }
-}
-
-#[derive(Debug)]
-enum ChromeControlMessage {
-    ConfigUpdate {
-        config: ChromeConfig,
-    },
-    Heartbeat {
-        response_tx: tokio::sync::oneshot::Sender<()>,
-    },
-    Shutdown,
-}
-
-fn spawn_chrome_driver_thread(
-    chrome_kill_tx: TokioMpsc::UnboundedSender<()>,
-    driver_control_recv: StdMpsc::Receiver<ChromeControlMessage>,
-    chrome_websocket_url: Url,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn({
-        move || {
-            chrome_kill_on_error(chrome_kill_tx, || {
-                chrome_driver(chrome_websocket_url, driver_control_recv)
-            })
-        }
-    })
-}
-
-fn chrome_kill_on_error(
-    chrome_kill_tx: TokioMpsc::UnboundedSender<()>,
-    f: impl FnOnce() -> Result<(), DriveChromeError>,
-) {
-    if let Err(e) = f() {
-        error!("Received error during chrome drive {:?}", e);
-
-        if matches!(
-            e,
-            DriveChromeError::ConnectionFailure { .. } | DriveChromeError::Unresponsive { .. }
-        ) {
-            info!("Send chrome kill signal");
-            if chrome_kill_tx.send(()).is_err() {
-                trace!("The chrome kill signal receiver was already dropped");
-            }
-        }
-    }
-}
-
-#[tracing::instrument(fields(%chrome_websocket_url), skip(control_recv))]
-fn chrome_driver(
-    chrome_websocket_url: Url,
-    control_recv: StdMpsc::Receiver<ChromeControlMessage>,
-) -> Result<(), DriveChromeError> {
-    info!("Establish connection to chrome");
-    let browser = Browser::connect(chrome_websocket_url.into_string())
-        .map_err(DriveChromeError::ConnectionFailure)?;
-
-    info!("Wait for the initial tab");
-    let tab = browser
-        .wait_for_initial_tab()
-        .map_err(DriveChromeError::Unresponsive)?;
-
-    loop {
-        let control_msg = match control_recv.recv() {
-            Ok(msg) => msg,
-            Err(_) => {
-                info!("Control channel has hung up");
-                break;
-            }
-        };
-
-        match control_msg {
-            ChromeControlMessage::ConfigUpdate { config } => {
-                info!("Received config update {:?}", config);
-                tab.navigate_to(config.url.as_str())
-                    .map_err(DriveChromeError::Unresponsive)?;
-                tab.wait_until_navigated()
-                    .map_err(DriveChromeError::Unresponsive)?;
-            }
-            ChromeControlMessage::Heartbeat { response_tx } => {
-                tab.get_bounds().map_err(DriveChromeError::Unresponsive)?;
-                trace!("Handled heartbeat");
-                if response_tx.send(()).is_err() {
-                    trace!("The heartbeat receiver was already dropped");
-                }
-            }
-            ChromeControlMessage::Shutdown => {
-                info!("Received shutdown control message");
-                break;
-            }
-        }
-    }
-
-    info!("Exiting chrome driver loop");
     Ok(())
 }
 
